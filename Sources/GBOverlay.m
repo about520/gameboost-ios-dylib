@@ -7,6 +7,7 @@
 #import "GBLog.h"
 #import "GBAdHooks.h"
 #import "GBRewardHooks.h"
+#import "GBRuntime.h"
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
 
@@ -111,6 +112,7 @@ static UIWindow *gOverlayWindow = nil;
 @property (nonatomic, strong) UISwitch  *swSkip;
 @property (nonatomic, strong) UISwitch  *swSim;
 @property (nonatomic, strong) UISwitch  *swClose;
+@property (nonatomic, strong) UISwitch  *swPresent;
 @property (nonatomic, strong) UISwitch  *swEnforce;
 @property (nonatomic, strong) UISwitch  *swRepeat;
 @property (nonatomic, strong) UISlider  *slider;
@@ -208,7 +210,7 @@ static UIWindow *gOverlayWindow = nil;
     CGFloat w = self.bounds.size.width;
     CGFloat y = 10;
 
-    [self titleLabel:@"GameBoost  v1.0" y:y]; y += 26;
+    [self titleLabel:@"GameBoost  v1.2" y:y]; y += 26;
     UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(14, y, w - 28, 16)];
     sub.text = @"拖动小球移动 · 点击小球开合面板";
     sub.textColor = [UIColor colorWithWhite:1 alpha:0.4];
@@ -222,10 +224,12 @@ static UIWindow *gOverlayWindow = nil;
                                       y:y action:@selector(onMaster:) isOn:cfg.masterEnabled]; y += 46;
     self.swSkip    = [self addSwitchRow:@"跳过广告" detail:@"拦截展示，不发广告请求"
                                       y:y action:@selector(onSkipAds:) isOn:cfg.skipAds]; y += 46;
-    self.swSim     = [self addSwitchRow:@"补发奖励回调" detail:@"模拟 已发奖 / 已关闭 通知给游戏"
+    self.swSim     = [self addSwitchRow:@"补发奖励回调" detail:@"补发「奖励到账」通知；「已结束」通知始终会发"
                                       y:y action:@selector(onSimReward:) isOn:cfg.simulateRewardCallback]; y += 46;
-    self.swClose   = [self addSwitchRow:@"兜底关闭广告" detail:@"定时轮询，自动点掉 × / 跳过"
+    self.swClose   = [self addSwitchRow:@"兜底关闭广告" detail:@"定时轮询，自动点掉广告里的 × / 跳过"
                                       y:y action:@selector(onCloseAd:) isOn:cfg.closeAdViews]; y += 50;
+    self.swPresent = [self addSwitchRow:@"拦截弹窗广告" detail:@"默认关：可能拦掉游戏自己的弹窗界面"
+                                      y:y action:@selector(onPresent:) isOn:cfg.interceptPresentVC]; y += 54;
 
     // —— 奖励
     [self sectionLabel:@"奖励翻倍" y:y]; y += 22;
@@ -254,6 +258,7 @@ static UIWindow *gOverlayWindow = nil;
     [self button:@"悬浮球归位到屏幕右侧" y:y action:@selector(onResetBall:)]; y += 40;
     [self button:@"重新扫描并挂载 hook" y:y action:@selector(onRescan:)]; y += 40;
     [self button:@"立即关闭当前广告" y:y action:@selector(onCloseNow:)]; y += 40;
+    [self button:@"一键还原：卸载全部 hook" y:y action:@selector(onUninstall:)]; y += 40;
     [self button:@"输出诊断信息" y:y action:@selector(onDiag:)]; y += 40;
     [self button:@"清空日志" y:y action:@selector(onClearLog:)]; y += 44;
 
@@ -281,6 +286,7 @@ static UIWindow *gOverlayWindow = nil;
     self.swSkip.on    = cfg.skipAds;
     self.swSim.on     = cfg.simulateRewardCallback;
     self.swClose.on   = cfg.closeAdViews;
+    self.swPresent.on = cfg.interceptPresentVC;
     self.swEnforce.on = cfg.enforceReward;
     self.swRepeat.on  = cfg.repeatNoArgGrants;
     self.slider.value = cfg.multiplier;
@@ -307,6 +313,7 @@ static UIWindow *gOverlayWindow = nil;
 - (void)onSkipAds:(UISwitch *)sw  { [GBConfig shared].skipAds = sw.on; GBLog(@"跳过广告：%@", sw.on ? @"开" : @"关"); }
 - (void)onSimReward:(UISwitch *)sw{ [GBConfig shared].simulateRewardCallback = sw.on; GBLog(@"补发回调：%@", sw.on ? @"开" : @"关"); }
 - (void)onCloseAd:(UISwitch *)sw  { [GBConfig shared].closeAdViews = sw.on; GBLog(@"兜底关闭：%@", sw.on ? @"开" : @"关"); }
+- (void)onPresent:(UISwitch *)sw  { [GBConfig shared].interceptPresentVC = sw.on; GBLog(@"拦截弹窗广告：%@", sw.on ? @"开" : @"关"); }
 - (void)onEnforce:(UISwitch *)sw  { [GBConfig shared].enforceReward = sw.on; GBLog(@"奖励改写：%@", sw.on ? @"开" : @"关"); }
 - (void)onRepeat:(UISwitch *)sw   { [GBConfig shared].repeatNoArgGrants = sw.on; GBLog(@"无参重复：%@", sw.on ? @"开" : @"关"); }
 
@@ -320,6 +327,8 @@ static UIWindow *gOverlayWindow = nil;
 - (void)onRescan:(UIButton *)b {
     GBLog(@"手动重新扫描……");
     b.enabled = NO;
+    // GBInstallHook 现在是幂等的：已挂过的 selector 会直接跳过，
+    // 所以重复点这个按钮不会再造成「原实现被覆盖成自己的 hook」→ 无限递归。
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         GBInstallAdHooks();
         GBInstallRewardHooks();
@@ -328,6 +337,16 @@ static UIWindow *gOverlayWindow = nil;
 }
 
 - (void)onCloseNow:(UIButton *)b     { GBLog(@"手动关闭广告"); GBCloseAdViewsNow(); }
+
+/// 一键还原：把本插件挂过的所有 hook 逐个写回原实现，并关掉总开关。
+/// 游戏已经被搞到不正常时，这是最容易确认「是不是插件干的」的一步。
+- (void)onUninstall:(UIButton *)b {
+    NSUInteger n = GBUninstallAllHooks();
+    [GBConfig shared].masterEnabled = NO;
+    [self refreshFromConfig];
+    GBLog(@"已卸载全部 hook（%lu 个），总开关已关闭。游戏会恢复原生行为", (unsigned long)n);
+    GBLog(@"如需重新启用：先点「重新扫描并挂载 hook」，再打开总开关");
+}
 
 - (void)onHide15:(UIButton *)b {
     GBLog(@"临时隐藏悬浮窗 15 秒");
@@ -342,10 +361,12 @@ static UIWindow *gOverlayWindow = nil;
 - (void)onDiag:(UIButton *)b {
     GBConfig *cfg = [GBConfig shared];
     GBLog(@"———— 诊断 ————");
-    GBLog(@"开关：master=%d skipAds=%d simReward=%d closeAd=%d enforce=%d repeat=%d x%ld",
+    GBLog(@"开关：master=%d skipAds=%d simReward=%d closeAd=%d interceptPresent=%d enforce=%d repeat=%d x%ld",
           (int)cfg.masterEnabled, (int)cfg.skipAds, (int)cfg.simulateRewardCallback,
-          (int)cfg.closeAdViews, (int)cfg.enforceReward, (int)cfg.repeatNoArgGrants,
+          (int)cfg.closeAdViews, (int)cfg.interceptPresentVC,
+          (int)cfg.enforceReward, (int)cfg.repeatNoArgGrants,
           (long)cfg.multiplier);
+    GBLog(@"已挂载 hook 总数：%lu", (unsigned long)GBInstalledHookCount());
     GBLog(@"广告类 %lu 个：", (unsigned long)GBDetectedAdClasses().count);
     for (NSString *s in GBDetectedAdClasses()) GBLog(@"  · %@", s);
     GBLog(@"已挂载奖励方法 %lu 个：", (unsigned long)cfg.hookedRewardMethods.count);
@@ -544,6 +565,13 @@ void GBOverlayShow(void) {
 }
 
 void GBOverlayRefresh(void) {
+    // 这个函数会被 -[UIWindow makeKeyAndVisible] 的守卫反复触发。
+    // 加一层节流：游戏频繁切窗口时不要反复刷新面板控件。
+    static CFAbsoluteTime last = 0;
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    if (now - last < 1.5) return;
+    last = now;
+
     dispatch_async(dispatch_get_main_queue(), ^{
         if (gRoot) [gRoot.panel refreshFromConfig];
     });
@@ -551,6 +579,10 @@ void GBOverlayRefresh(void) {
 
 BOOL GBOverlayIsVisible(void) {
     return gOverlayWindow != nil && !gOverlayWindow.hidden;
+}
+
+UIWindow *GBOverlayWindow(void) {
+    return gOverlayWindow;
 }
 
 static NSTimer *gRestoreTimer = nil;

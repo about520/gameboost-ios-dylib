@@ -127,43 +127,55 @@ chmod +x inject_dylib.sh
 | 开关 | 默认 | 说明 |
 |---|---|---|
 | 插件总开关 | 开 | 关掉后所有 hook 直接透传原实现 |
-| 跳过广告 | **开** | 拦截展示、不发广告请求 |
-| 补发奖励回调 | **开** | 拦截时模拟「已发奖 / 已关闭」通知给游戏 |
-| 兜底关闭广告 | 关 | 每秒轮询，自动点掉 ×/跳过 按钮 |
+| 跳过广告 | **开** | 拦截展示、不发广告请求，并补发「广告已结束」通知 |
+| 补发奖励回调 | **开** | 额外补发「奖励到账」通知；「已结束」通知**始终会发**（不发游戏会一直等） |
+| 兜底关闭广告 | 关 | 定时轮询，只在**广告容器内**自动点掉 ×/跳过 |
+| 拦截弹窗广告 | **关** | 拦 `presentViewController`。可能拦掉游戏自己的界面，默认关 |
 | **启用改写数值** | **关** | 默认只在日志里显示命中，**不改数值** |
 | 无参发奖重复调用 | 关 | `-claimReward` 这类无参方法按倍率重复调 |
 | 倍率 | x2 | 2–20 |
 
 **为什么默认不改数值**：奖励翻倍是「猜目标」——扫描出来的方法名匹配不代表语义正确，误改可能污染存档。所以先开着日志跑一遍，看「运行日志」里哪些方法真被命中，确认过再打开改写。
 
-### 游戏点不动 / 按钮点不了？（v1.1 已修）
+### 游戏里点一下会卡住 / 界面出不来？（v1.2 已修）
 
-如果**整个游戏界面都点不动**（比如登录按钮完全没反应），那是覆盖层的点击穿透没做全，
-v1.1 已修复。原因是：
+v1.1 修好了「整屏点不动」之后暴露出另一类问题：**点击能响应，但点下去游戏会卡住**。
+v1.2 一共修了 5 个会导致这个现象的真缺陷：
 
-`UIView.hitTest` 在自己 `pointInside` 通过、但**没有任何子视图命中时会返回 `self`**。
-而 `UIWindow` 的 bounds 就是整屏 —— 所以即使 rootView 返回了 nil，**窗口自己**仍会
-成为命中目标，UIKit 认为这个窗口要接收触摸，游戏窗口永远收不到事件。
-
-修法是两层都要拦：
-
-| 层 | 类 | 作用 |
+| # | 缺陷 | 后果 |
 |---|---|---|
-| 窗口层 | `GBPassthroughWindow` | hitTest 命中窗口自己 → 返回 nil（**关键**） |
-| 根视图层 | `GBPassthroughView` | hitTest 命中自己 → 返回 nil |
+| 1 | `GBInstallHook` 没有幂等保护。重复挂载（比如点了「重新扫描并挂载 hook」）时，第二次 `method_getImplementation` 拿到的是**我们自己的 hook**，被当成「原实现」登记下来 | hook 里调 `orig` = 调自己 → **无限递归，主线程卡死**。尤其致命的是 `presentViewController` 那一个：游戏每次弹界面都会递归 |
+| 2 | L3 兜底扫描会遍历**我们自己的面板**，而面板里有个按钮叫「立即关闭当前广告」，标题含「关闭」 | 被自己的扫描命中 → 触发 `onCloseNow:` → 又调用 `GBCloseAdViewsNow()` → **自我递归卡死** |
+| 3 | L3 关键词表里有单字符 `"x"`，用 `containsString:` 匹配 | 任何标题含字母 x 的按钮都会被命中（Next / Exit / Max / ×2 / Exp…）然后被**自动点击**，每 0.6 秒一次 |
+| 4 | L2 拦下 `presentViewController` 后调用 `beginAppearanceTransition` / `endAppearanceTransition` | 对一个从未真正 present 过的 VC 手动跑「出现→消失」时序，会让它的 `_appearState` 错乱；之后正常弹出会被 UIKit 静默拒绝 → **界面永远出不来** |
+| 5 | 奖励 hook 的日志没有节流，`GBLog` 又在**持锁同步写文件**，每条日志还走一次 `NSDateFormatter` | 游戏一调用被挂载的方法，主线程就同步做磁盘 I/O → **点一下卡一下** |
 
-修好后，覆盖层只有**悬浮球那 56×56 一块**会接收触摸，其余全屏透传。
+另外顺手做了三件避免同类问题的事：
+
+- **类名匹配拆成「强特征 / 弱特征」两档。** 旧版把 `splash` / `appopen` / `advert` 和 `interstitial` 混在一张表里做 substring 匹配 —— 而很多游戏**自己的**开屏就叫 `SplashViewController`，会被当成广告拦掉。现在有副作用的动作（拦截/隐藏/自动点击）只认强特征（`SplashAd` / `AdLoad` 这类），弱特征只在显式打开「拦截弹窗广告」时才参与。
+- **L1 不再拦 `load` / `request`，只拦「展示」阶段。** 拦加载会让 SDK 的状态机停在半路，游戏等回调等到超时。
+- **回调拆成「发奖组」和「结束组」，结束组无条件补发。** 游戏几乎都是「展示广告 → 等结束回调 → 继续流程」，把展示吞掉又不通知，它就会一直停在加载页 —— 这正是「点一下卡住」最直接的成因。发奖组才跟开关走。
+
+### 已经卡住了怎么救
+
+面板「操作」区：
+
+- **一键还原：卸载全部 hook** —— 把本插件挂过的所有 hook 逐个写回原实现，并关掉总开关。这是判断「是不是插件干的」最快的一步
+- **临时隐藏 15 秒** —— 折叠面板 + 整个窗口隐藏 15 秒后自动恢复
+- **悬浮球归位到屏幕右侧** —— 球被拖到奇怪位置时一键挪回安全区并持久化
+
+另外 v1.2 内置了**主线程看门狗**：独立后台队列每 2 秒 ping 一次主队列，连续 10 秒无响应就自动关掉「兜底关闭广告」和「拦截弹窗广告」并写日志。所以最坏情况也能自己缓过来，日志里会留下一行 `⚠️ 主线程连续 N 秒无响应`。
 
 ### 如果悬浮球正好压住了某个按钮
 
-面板的「操作」区新增两个应急按钮：
+面板的「操作」区：
 
 - **临时隐藏 15 秒** —— 折叠面板 + 整个窗口隐藏 15 秒后自动恢复。登录、授权弹窗被挡时用这个
 - **悬浮球归位到屏幕右侧** —— 把球挪回屏幕右侧的安全位置（y ≈ 28% 处）并持久化
 
 ### 日志
 
-面板里的「运行日志」实时显示最近 120 条，同时写到 App 沙盒 `Documents/GameBoost.log`（用 iMazing / 爱思助手 导出）。
+面板里的「运行日志」实时显示最近 120 条，同时写到 App 沙盒 `Documents/GameBoost.log`（用 iMazing / 爱思助手 导出）。v1.2 起文件写入是**异步缓冲**的，不会阻塞主线程；`NSLog` 限流到每秒 40 条。
 
 ---
 
@@ -173,11 +185,16 @@ v1.1 已修复。原因是：
 
 | 层 | 手段 | 覆盖 |
 |---|---|---|
-| **L1 SDK 级** | 运行时扫描全部非系统类，类名匹配 `Interstitial / Rewarded / RewardVideo / VideoAd / Splash / AppOpen / Advert / ExpressAd`，再挂掉其 `show / present / play / load / request` 开头的方法 | AdMob、Unity Ads、AppLovin/MAX、穿山甲(BUAdSDK)、优量汇(GDT)、快手、百度 等 |
-| **L2 通用级** | hook `-[UIViewController presentViewController:animated:completion:]`，凡是要弹出的 VC 类名像广告就拦住不弹 | 未知 SDK、自研广告 SDK |
-| **L3 兜底级** | 定时扫窗口层级，找「×/✕/跳过/Close/Skip/关闭」按钮点掉；整层广告 window 直接隐藏 | 已经弹出来关不掉的、开屏广告 |
+| **L1 SDK 级** | 运行时扫描全部非系统类，类名匹配 **强特征** `Interstitial / Rewarded / RewardVideo / VideoAd / SplashAd / AppOpenAd / Advert / FullScreenAd / ExpressAd / AdViewController / AdPlayer`，再挂掉其 `show / present / display / play / render / open` 开头的方法 | AdMob、Unity Ads、AppLovin/MAX、穿山甲(BUAdSDK)、优量汇(GDT)、快手、百度 等 |
+| **L2 通用级** | hook `-[UIViewController presentViewController:animated:completion:]`，要弹出的 VC 类名像广告就拦住不弹。**默认关闭**，需手动开「拦截弹窗广告」 | 未知 SDK、自研广告 SDK |
+| **L3 兜底级** | 定时扫窗口层级，**只在强广告容器内**找「×/✕/跳过/Close/Skip/关闭」按钮点掉（同一控件只点一次）；整层是广告 window 才隐藏 | 已经弹出来关不掉的、开屏广告 |
 
-拦截后会**补触发回调链**：`rewardedVideoAdServerRewardDidSucceed:verify:` → `rewardedVideoAdDidPlayFinish:didFailWithError:` → `rewardedVideoAdDidClose:`（穿山甲命名）等，共 20+ 个常见 selector，用 `NSInvocation` 按真实签名安全调用。这一步是「跳过广告但仍拿奖励」的关键——游戏是靠这些回调发奖的。
+拦截后会**补触发回调链**，分两组：
+
+- **结束组**（无条件发）：`rewardedVideoAdDidPlayFinish:didFailWithError:` → `rewardedVideoAdDidClose:`（穿山甲）、`gdt_rewardVideoAdDidClose:`（优量汇）、`adDidDismissFullScreenContent:`（AdMob）、`onUnityAdsDidFinish:withFinishState:`（Unity）等
+- **发奖组**（跟开关走）：`rewardedVideoAdServerRewardDidSucceed:verify:`、`onRewardedVideoAdRewarded:`、`didReceiveRewardForPlacement:` 等
+
+用 `NSInvocation` 按真实签名安全调用（参数多于 2 个的一律不猜，避免填错参数崩溃）。两组都没命中时，还会按生命周期关键词在 delegate 上泛扫一遍兜底 —— 目的只有一个：**别让游戏等在一个永远不来的回调上**。
 
 AdMob 那种 `presentFromRootViewController:userDidEarnRewardHandler:` 的形式，直接调用那个 block 就等于立即发奖。
 

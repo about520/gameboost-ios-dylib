@@ -9,6 +9,7 @@ NSString *const kGBMaster        = @"gb.master";
 NSString *const kGBSkipAds       = @"gb.skipAds";
 NSString *const kGBCloseAdViews  = @"gb.closeAdViews";
 NSString *const kGBSimulateReward= @"gb.simulateReward";
+NSString *const kGBInterceptPresent = @"gb.interceptPresent";
 NSString *const kGBEnforceReward = @"gb.enforceReward";
 NSString *const kGBRepeatNoArg   = @"gb.repeatNoArg";
 NSString *const kGBMultiplier    = @"gb.multiplier";
@@ -41,11 +42,16 @@ static NSString *const kGBBallHas= @"gb.ball.has";
         [d setBool:NO  forKey:kGBRepeatNoArg];
         [d setInteger:2 forKey:kGBMultiplier];
     }
+    // v1.2 新增项：老版本升级上来的设备不会走到上面的分支，单独补一次默认值
+    if ([d objectForKey:kGBInterceptPresent] == nil) {
+        [d setBool:NO forKey:kGBInterceptPresent];   // 拦截弹窗容易误伤，默认关闭
+    }
 
     _masterEnabled          = [d boolForKey:kGBMaster];
     _skipAds                = [d boolForKey:kGBSkipAds];
     _closeAdViews           = [d boolForKey:kGBCloseAdViews];
     _simulateRewardCallback = [d boolForKey:kGBSimulateReward];
+    _interceptPresentVC     = [d boolForKey:kGBInterceptPresent];
     _enforceReward          = [d boolForKey:kGBEnforceReward];
     _repeatNoArgGrants      = [d boolForKey:kGBRepeatNoArg];
     _multiplier             = MAX(1, [d integerForKey:kGBMultiplier]);
@@ -63,6 +69,7 @@ static NSString *const kGBBallHas= @"gb.ball.has";
 - (void)setSkipAds:(BOOL)v                    { _skipAds = v;                [self sync]; }
 - (void)setCloseAdViews:(BOOL)v               { _closeAdViews = v;           [self sync]; }
 - (void)setSimulateRewardCallback:(BOOL)v     { _simulateRewardCallback = v; [self sync]; }
+- (void)setInterceptPresentVC:(BOOL)v         { _interceptPresentVC = v;     [self sync]; }
 - (void)setEnforceReward:(BOOL)v              { _enforceReward = v;          [self sync]; }
 - (void)setRepeatNoArgGrants:(BOOL)v          { _repeatNoArgGrants = v;      [self sync]; }
 - (void)setMultiplier:(NSInteger)m            { _multiplier = MAX(1, MIN(20, m)); [self sync]; }
@@ -73,6 +80,7 @@ static NSString *const kGBBallHas= @"gb.ball.has";
     [d setBool:_skipAds                forKey:kGBSkipAds];
     [d setBool:_closeAdViews           forKey:kGBCloseAdViews];
     [d setBool:_simulateRewardCallback forKey:kGBSimulateReward];
+    [d setBool:_interceptPresentVC     forKey:kGBInterceptPresent];
     [d setBool:_enforceReward          forKey:kGBEnforceReward];
     [d setBool:_repeatNoArgGrants      forKey:kGBRepeatNoArg];
     [d setInteger:_multiplier          forKey:kGBMultiplier];

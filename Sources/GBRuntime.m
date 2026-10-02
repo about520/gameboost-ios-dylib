@@ -153,11 +153,101 @@ char GBArgType(const char *enc, int index) {
     return *p;
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  hook 登记表
+// ═══════════════════════════════════════════════════════════════
+//
+//  每一项：[ NSValue(Class), NSString(selector), NSValue(原IMP) ]
+//
+//  为什么必须有这张表：
+//    method_setImplementation 是「覆盖式」的。如果对同一个 (cls, sel) 挂两次，
+//    第二次 method_getImplementation 拿到的就是**我们自己的 hook**，
+//    把它当成「原实现」存起来之后，hook 里再调 orig 就等于调自己 →
+//    无限递归 → 主线程栈溢出卡死。这个表让重复挂载变成安全空操作。
+//
+//  同时它支撑「一键还原」：把登记的原实现逐个写回去。
+
+static NSMutableArray<NSArray *> *gHookRecs = nil;
+static NSLock *gHookLock = nil;
+
+static void GBHookRecInit(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        gHookRecs = [NSMutableArray array];
+        gHookLock = [NSLock new];
+    });
+}
+
+/// 已登记的原实现；NULL 表示没挂过
+static IMP GBHookRecLookup(Class cls, SEL sel) {
+    GBHookRecInit();
+    NSString *name = NSStringFromSelector(sel);
+    IMP found = NULL;
+    [gHookLock lock];
+    for (NSArray *e in gHookRecs) {
+        if ((Class)[(NSValue *)e[0] pointerValue] == cls &&
+            [(NSString *)e[1] isEqualToString:name]) {
+            found = (IMP)[(NSValue *)e[2] pointerValue];
+            break;
+        }
+    }
+    [gHookLock unlock];
+    return found;
+}
+
+static void GBHookRecAdd(Class cls, SEL sel, IMP orig) {
+    GBHookRecInit();
+    NSArray *e = @[[NSValue valueWithPointer:(const void *)cls],
+                   NSStringFromSelector(sel),
+                   [NSValue valueWithPointer:(const void *)orig]];
+    [gHookLock lock];
+    [gHookRecs addObject:e];
+    [gHookLock unlock];
+}
+
+NSUInteger GBInstalledHookCount(void) {
+    GBHookRecInit();
+    [gHookLock lock];
+    NSUInteger n = gHookRecs.count;
+    [gHookLock unlock];
+    return n;
+}
+
+NSUInteger GBUninstallAllHooks(void) {
+    GBHookRecInit();
+    [gHookLock lock];
+    NSArray *copy = [gHookRecs copy];
+    [gHookRecs removeAllObjects];
+    [gHookLock unlock];
+
+    NSUInteger n = 0;
+    for (NSArray *e in copy) {
+        Class cls = (Class)[(NSValue *)e[0] pointerValue];
+        SEL sel = NSSelectorFromString((NSString *)e[1]);
+        IMP orig = (IMP)[(NSValue *)e[2] pointerValue];
+        if (!cls || !sel || !orig) continue;
+
+        Method m = class_getInstanceMethod(cls, sel);
+        if (!m) continue;
+        method_setImplementation(m, orig);
+        n++;
+    }
+    return n;
+}
+
 BOOL GBInstallHook(Class cls, SEL sel, IMP newImp, BOOL isClassMethod, IMP *outOrig) {
     if (!cls || !sel || !newImp) return NO;
 
     // 类方法的实现挂在 metaclass 上，必须分开取，否则会把类方法挂成实例方法
     Class target = isClassMethod ? object_getClass(cls) : cls;
+
+    // ★ 幂等保护 ★：已经挂过就什么都不做，只把首次登记的原实现回填。
+    // 少了这一步，二次挂载就会把 orig 写成自己的 hook，随后无限递归。
+    IMP already = GBHookRecLookup(target, sel);
+    if (already) {
+        if (outOrig) *outOrig = already;
+        return YES;
+    }
 
     Method m = class_getInstanceMethod(target, sel);
     if (!m) return NO;
@@ -165,15 +255,23 @@ BOOL GBInstallHook(Class cls, SEL sel, IMP newImp, BOOL isClassMethod, IMP *outO
     const char *types = method_getTypeEncoding(m);
     IMP old = method_getImplementation(m);
 
+    // 兜底：万一原实现就是我们的某个 hook（理论上到不了这里），也不要登记
+    if (old == newImp) {
+        if (outOrig) *outOrig = old;
+        return NO;
+    }
+
     // class_addMethod 成功 → 该方法原本是从父类/父元类继承的，
     // 于是新实现只挂到 target 上，父类纹丝不动。
     // 失败 → 方法本来就定义在 target 上，直接替换实现。
     if (class_addMethod(target, sel, newImp, types)) {
+        GBHookRecAdd(target, sel, old);
         if (outOrig) *outOrig = old;
         return YES;
     }
 
     method_setImplementation(m, newImp);
+    GBHookRecAdd(target, sel, old);
     if (outOrig) *outOrig = old;
     return YES;
 }

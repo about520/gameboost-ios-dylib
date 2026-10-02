@@ -24,6 +24,11 @@ void GBOverlayRefresh(void);
 /// 悬浮窗是否已经出现
 BOOL GBOverlayIsVisible(void);
 
+/// 悬浮窗自身的 UIWindow。
+/// 广告兜底逻辑必须用它把自己排除掉 —— 否则扫描窗口层级时会命中面板上的
+/// 「立即关闭当前广告」按钮（标题含「关闭」），回调进来形成无限递归。
+UIWindow *_Nullable GBOverlayWindow(void);
+
 /// 临时隐藏整个悬浮窗（seconds 秒后自动恢复）。
 /// 用于悬浮球挡住游戏按钮（比如登录按钮）时的应急逃生通道。
 void GBOverlaySetHiddenTemporarily(NSTimeInterval seconds);

@@ -16,10 +16,10 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-/// 扫描并挂载奖励 hook。返回挂载成功的数量。
+/// 扫描并挂载奖励 hook。返回本次新挂载的数量（重复调用是幂等的）。
 NSInteger GBInstallRewardHooks(void);
 
-/// 卸载（本轮不支持真正卸载，返回 0 表示无操作）
+/// 当前已挂载的发奖方法数量
 NSInteger GBHookCount(void);
 
 NS_ASSUME_NONNULL_END

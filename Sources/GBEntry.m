@@ -7,6 +7,7 @@
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import <unistd.h>
 #import "GBConfig.h"
 #import "GBLog.h"
 #import "GBAdHooks.h"
@@ -62,6 +63,65 @@ static void GBInstallWindowGuard(void) {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  主线程看门狗
+// ═══════════════════════════════════════════════════════════════
+//
+//  免越狱环境既没有 crash log 也没法 attach lldb。万一某个 hook 把主线程
+//  拖住，用户看到的就只有「点一下卡住」而且毫无反馈。
+//
+//  这里从独立后台队列定时 ping 主队列：连续 10 秒收不到回应，
+//  就自动关掉两个最容易出问题的功能并写日志，让游戏能自己缓过来。
+
+static CFAbsoluteTime gLastPong = 0;
+static volatile BOOL   gPongFlag = NO;
+
+static void GBStartMainThreadWatchdog(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        dispatch_queue_t q = dispatch_queue_create("com.gameboost.watchdog",
+                                                   DISPATCH_QUEUE_SERIAL);
+        dispatch_source_t t = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, q);
+        dispatch_source_set_timer(t,
+                                  dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
+                                  (uint64_t)(2.0 * NSEC_PER_SEC),
+                                  (uint64_t)(0.5 * NSEC_PER_SEC));
+        dispatch_source_set_event_handler(t, ^{
+            // 退到后台时主线程本来就不跑，不能误判
+            if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) {
+                gLastPong = 0;
+                return;
+            }
+
+            gPongFlag = NO;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                gPongFlag = YES;
+                gLastPong = CFAbsoluteTimeGetCurrent();
+            });
+
+            usleep(1500 * 1000);      // 给主线程 1.5 秒回应
+
+            if (gPongFlag) return;
+
+            CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+            if (gLastPong <= 0) { gLastPong = now; return; }
+            if (now - gLastPong < 10.0) return;
+
+            GBConfig *cfg = [GBConfig shared];
+            if (cfg.closeAdViews || cfg.interceptPresentVC) {
+                cfg.closeAdViews = NO;
+                cfg.interceptPresentVC = NO;
+                GBLog(@"⚠️ 主线程连续 %.0f 秒无响应，已自动关闭「兜底关闭广告」与「拦截弹窗广告」",
+                      now - gLastPong);
+            } else {
+                GBLog(@"⚠️ 主线程连续 %.0f 秒无响应（危险功能已是关闭状态）", now - gLastPong);
+            }
+            gLastPong = now;
+        });
+        dispatch_resume(t);
+    });
+}
+
 static void GBEntryBoot(void) {
     gBootTries++;
 
@@ -75,7 +135,7 @@ static void GBEntryBoot(void) {
     gBooted = YES;
 
     GBLogEnableFileOutput();
-    GBLog(@"================ GameBoost 启动 ================");
+    GBLog(@"================ GameBoost v1.2 启动 ================");
     GBLog(@"进程：%@  (pid %d)",
           NSProcessInfo.processInfo.processName, getpid());
     GBLog(@"主类：%@", NSProcessInfo.processInfo.arguments.firstObject);
@@ -84,16 +144,22 @@ static void GBEntryBoot(void) {
     // 广告 hook 需要碰 UIViewController，放主线程更稳
     GBInstallAdHooks();
 
-    // 奖励扫描要遍历全部类和方法，放后台线程避免卡启动
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        GBInstallRewardHooks();
-        dispatch_async(dispatch_get_main_queue(), ^{
-            GBLog(@"奖励 hook 已就绪，悬浮窗可查看命中情况");
+    // 奖励扫描要遍历全部类和方法。本来就很重，再叠在游戏启动最忙的时候
+    // 会明显拖慢首屏，所以延后 2 秒 + 放后台线程。
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            GBInstallRewardHooks();
+            dispatch_async(dispatch_get_main_queue(), ^{
+                GBLog(@"奖励 hook 已就绪，共挂载 %lu 个（悬浮窗可查看命中情况）",
+                      (unsigned long)GBInstalledHookCount());
+            });
         });
     });
 
     GBInstallWindowGuard();
     GBOverlayShow();
+    GBStartMainThreadWatchdog();
 
     GBLog(@"提示：奖励翻倍默认只记录不修改；确认目标后再打开「启用改写数值」");
 }

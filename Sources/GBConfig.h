@@ -18,6 +18,7 @@ extern NSString *const kGBMaster;          // 插件总开关
 extern NSString *const kGBSkipAds;         // 跳过广告（拦截展示 + 补触发回调）
 extern NSString *const kGBCloseAdViews;    // 兜底：自动关闭已弹出的广告全屏视图
 extern NSString *const kGBSimulateReward;  // 拦截广告时补发“已获得奖励”回调
+extern NSString *const kGBInterceptPresent;// 拦截弹窗广告 VC（默认关，容易误伤游戏自己的 VC）
 
 // —— 奖励
 extern NSString *const kGBEnforceReward;   // 真正改写奖励数值（关闭时只记录不改）
@@ -32,6 +33,7 @@ extern NSString *const kGBMultiplier;      // 倍率 2~20
 @property (nonatomic, assign) BOOL skipAds;
 @property (nonatomic, assign) BOOL closeAdViews;
 @property (nonatomic, assign) BOOL simulateRewardCallback;
+@property (nonatomic, assign) BOOL interceptPresentVC;   // ★ 新增，默认 NO
 @property (nonatomic, assign) BOOL enforceReward;
 @property (nonatomic, assign) BOOL repeatNoArgGrants;
 @property (nonatomic, assign) NSInteger multiplier;

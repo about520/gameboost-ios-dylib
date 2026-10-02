@@ -133,16 +133,31 @@ def main():
     print()
     print("-" * 68)
     print("▶ 二进制里是否含我们自己的符号/类名")
+    #
+    # 注意编码：clang 把 **非 ASCII** 的 @"..." 字面量存成 UTF-16LE 放进
+    # __TEXT,__ustring，纯 ASCII 的才以 UTF-8 留在 __cstring。所以中文字
+    # 串必须两种编码都试，只按 UTF-8 搜会全 ✗ 造成误判。
     marks = [b"GameBoost", b"GBOverlay", b"GBAdHooks", b"GBRewardHooks",
              b"GBConfig", b"GBEntry", b"GBInstallHook", b"saveBallCenter",
-             b"beginAppearanceTransition", b"multiplier"]
+             b"beginAppearanceTransition", b"multiplier",
+             "GBPassthroughWindow", "GBPassthroughView",
+             "onHide15:", "onResetBall:", "resetBallPosition",
+             "悬浮球归位到屏幕右侧", "临时隐藏 15 秒（点击被挡时用）"]
     hit = 0
     for m in marks:
-        n = data.count(m)
+        b = m if isinstance(m, bytes) else m.encode("utf-8")
+        label = b.decode("utf-8", "replace")
+        n = data.count(b)
+        enc = "utf-8"
+        if isinstance(m, str) and not m.isascii():
+            # 中文串按 UTF-16LE 再数一次
+            n16 = data.count(m.encode("utf-16-le"))
+            enc = "utf-16le"
+            n = max(n, n16)
         flag = "✓" if n else "✗"
         if n:
             hit += 1
-        print(f"    {flag} {m.decode():<26} 出现 {n} 次")
+        print(f"    {flag} {label:<26} 出现 {n} 次 ({enc})")
     print()
     print(f"命中 {hit}/{len(marks)} 个标志串")
     print("=" * 68)

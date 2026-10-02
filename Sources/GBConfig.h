@@ -47,6 +47,9 @@ extern NSString *const kGBMultiplier;      // 倍率 2~20
 // 取有效倍率：总开关或翻倍关闭时返回 1
 - (NSInteger)effectiveMultiplier;
 
+// 把悬浮球位置写入 NSUserDefaults（拖动结束时调用）
+- (void)saveBallCenter;
+
 @end
 
 NS_ASSUME_NONNULL_END

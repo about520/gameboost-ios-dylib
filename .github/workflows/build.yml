@@ -25,6 +25,7 @@ jobs:
         run: |
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
+          echo "bash: $(bash --version | head -1)"
         working-directory: ${{ env.PROJ }}
 
       - name: 编译 dylib

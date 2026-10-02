@@ -58,8 +58,12 @@ build_one() {
   if [ "$arch" = "arm64e" ]; then
     extra=(-target "arm64e-apple-ios${MIN_IOS}")
   fi
-  xcrun -sdk iphoneos clang "${extra[@]}" -arch "$arch" "${COMMON[@]}" \
-    -o "$out" "${SRCS[@]}"
+  # 注意：macOS 自带 /bin/bash 是 3.2，在 set -u 下展开「空数组」会报
+  #   extra[@]: unbound variable
+  # （bash 4.4 才修掉这个行为，而 macOS 15 起才默认用 zsh 且 runner 仍可能是 3.2）
+  # 所以必须写成 ${arr[@]+"${arr[@]}"} 这种「非空才展开」的形式。
+  xcrun -sdk iphoneos clang ${extra[@]+"${extra[@]}"} -arch "$arch" "${COMMON[@]}" \
+    -o "$out" ${SRCS[@]+"${SRCS[@]}"}
 }
 
 if [ "$MODE" = "arm64" ]; then

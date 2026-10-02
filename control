@@ -1,0 +1,9 @@
+Package: com.gameboost.inject
+Name: GameBoost
+Version: 1.0.0
+Architecture: iphoneos-arm64
+Description: iOS 免越狱注入型 dylib —— 悬浮窗 + 广告跳过 + 奖励翻倍
+Maintainer: local
+Author: local
+Section: Tweaks
+Depends: firmware (>= 14.0)

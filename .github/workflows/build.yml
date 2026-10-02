@@ -1,0 +1,49 @@
+name: build-ios-dylib
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    # 编译 iOS dylib 必须有 macOS + Xcode，所以借 GitHub 的 macOS runner
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 定位工程目录
+        run: |
+          if [ -f ./build_dylib.sh ]; then
+            echo "PROJ=." >> "$GITHUB_ENV"
+          else
+            echo "PROJ=IOS-GameBoost" >> "$GITHUB_ENV"
+          fi
+
+      - name: 环境信息
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+        working-directory: ${{ env.PROJ }}
+
+      - name: 编译 dylib
+        run: |
+          chmod +x build_dylib.sh
+          ./build_dylib.sh
+        working-directory: ${{ env.PROJ }}
+
+      - name: 产物信息
+        run: |
+          ls -la build/
+          lipo -info build/GameBoost.dylib
+          otool -L build/GameBoost.dylib
+        working-directory: ${{ env.PROJ }}
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: GameBoost.dylib
+          path: ${{ env.PROJ }}/build/GameBoost.dylib
+          if-no-files-found: error
+          retention-days: 30

@@ -37,6 +37,30 @@ static UIWindow *gOverlayWindow = nil;
 @end
 
 // ═══════════════════════════════════════════════════════════════
+//  点击穿透窗口  ★ 这一层不能省 ★
+// ═══════════════════════════════════════════════════════════════
+//
+//  UIView.hitTest 的行为是：自己 pointInside 通过、但没有任何子视图命中时，
+//  **返回 self**。而 UIWindow 的 bounds 正好是整屏，于是「窗口自己」成了命中
+//  目标 —— UIKit 认为这个窗口要接收触摸，游戏窗口永远收不到事件。
+//
+//  之前只在 rootView 上做了穿透，结果就是：整屏都点不动（游戏登录按钮没反应）。
+//  必须在 window 这一层再拦一次：命中结果是窗口自己 → 返回 nil，
+//  这样 UIKit 才会把这次触摸交给下面那一层窗口。
+
+@interface GBPassthroughWindow : UIWindow
+@end
+
+@implementation GBPassthroughWindow
+
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    UIView *v = [super hitTest:point withEvent:event];
+    return (v == self) ? nil : v;
+}
+
+@end
+
+// ═══════════════════════════════════════════════════════════════
 //  悬浮球
 // ═══════════════════════════════════════════════════════════════
 
@@ -186,7 +210,7 @@ static UIWindow *gOverlayWindow = nil;
 
     [self titleLabel:@"GameBoost  v1.0" y:y]; y += 26;
     UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(14, y, w - 28, 16)];
-    sub.text = @"长按小球拖动 · 点击小球折叠";
+    sub.text = @"拖动小球移动 · 点击小球开合面板";
     sub.textColor = [UIColor colorWithWhite:1 alpha:0.4];
     sub.font = [UIFont systemFontOfSize:10];
     [_scroll addSubview:sub];
@@ -226,6 +250,8 @@ static UIWindow *gOverlayWindow = nil;
 
     // —— 操作
     [self sectionLabel:@"操作" y:y]; y += 22;
+    [self button:@"临时隐藏 15 秒（点击被挡时用）" y:y action:@selector(onHide15:)]; y += 40;
+    [self button:@"悬浮球归位到屏幕右侧" y:y action:@selector(onResetBall:)]; y += 40;
     [self button:@"重新扫描并挂载 hook" y:y action:@selector(onRescan:)]; y += 40;
     [self button:@"立即关闭当前广告" y:y action:@selector(onCloseNow:)]; y += 40;
     [self button:@"输出诊断信息" y:y action:@selector(onDiag:)]; y += 40;
@@ -303,6 +329,16 @@ static UIWindow *gOverlayWindow = nil;
 
 - (void)onCloseNow:(UIButton *)b     { GBLog(@"手动关闭广告"); GBCloseAdViewsNow(); }
 
+- (void)onHide15:(UIButton *)b {
+    GBLog(@"临时隐藏悬浮窗 15 秒");
+    GBOverlaySetHiddenTemporarily(15);
+}
+
+- (void)onResetBall:(UIButton *)b {
+    GBOverlayResetBallPosition();
+    GBLog(@"悬浮球已归位到屏幕右侧");
+}
+
 - (void)onDiag:(UIButton *)b {
     GBConfig *cfg = [GBConfig shared];
     GBLog(@"———— 诊断 ————");
@@ -329,6 +365,9 @@ static UIWindow *gOverlayWindow = nil;
 @property (nonatomic, strong) GBBallView  *ball;
 @property (nonatomic, strong) GBPanelView *panel;
 @property (nonatomic, assign) BOOL expanded;
+- (void)layoutPanel;
+- (void)collapse;
+- (void)resetBallPosition;
 @end
 
 @implementation GBRootViewController
@@ -425,6 +464,29 @@ static UIWindow *gOverlayWindow = nil;
     }
 }
 
+- (void)collapse {
+    self.expanded = NO;
+    self.panel.hidden = YES;
+    [self.panel.logTimer invalidate];
+    self.panel.logTimer = nil;
+}
+
+/// 把悬浮球挪回屏幕右侧的安全位置，并把新位置持久化
+- (void)resetBallPosition {
+    CGRect screen = UIScreen.mainScreen.bounds;
+    CGFloat side = self.ball.bounds.size.width;
+    if (side <= 0) side = 56;
+    self.ball.center = CGPointMake(screen.size.width - side / 2 - 8,
+                                   screen.size.height * 0.28);
+
+    GBConfig *cfg = [GBConfig shared];
+    cfg.ballCenter = self.ball.center;
+    cfg.hasBallCenter = YES;
+    [cfg saveBallCenter];
+
+    if (self.expanded) [self layoutPanel];
+}
+
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     if (self.expanded) [self layoutPanel];
@@ -461,12 +523,12 @@ void GBOverlayShow(void) {
         UIWindowScene *scene = GBActiveScene();
         UIWindow *w = nil;
         if (scene) {
-            w = [[UIWindow alloc] initWithWindowScene:scene];
+            w = [[GBPassthroughWindow alloc] initWithWindowScene:scene];
         } else if (@available(iOS 13.0, *)) {
             GBLog(@"⚠️ 没有可用的 UIWindowScene，悬浮窗延后");
             return;
         } else {
-            w = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
+            w = [[GBPassthroughWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
         }
 
         w.frame = UIScreen.mainScreen.bounds;
@@ -489,4 +551,30 @@ void GBOverlayRefresh(void) {
 
 BOOL GBOverlayIsVisible(void) {
     return gOverlayWindow != nil && !gOverlayWindow.hidden;
+}
+
+static NSTimer *gRestoreTimer = nil;
+
+void GBOverlaySetHiddenTemporarily(NSTimeInterval seconds) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!gOverlayWindow) return;
+
+        // 折叠面板 + 整个窗口隐藏 —— 隐藏的窗口不参与命中测试，
+        // 这段时间内覆盖层对游戏是完全透明的
+        if (gRoot) [gRoot collapse];
+        gOverlayWindow.hidden = YES;
+
+        [gRestoreTimer invalidate];
+        gRestoreTimer = [NSTimer scheduledTimerWithTimeInterval:seconds
+                                                        repeats:NO
+                                                          block:^(NSTimer *t) {
+            if (gOverlayWindow) gOverlayWindow.hidden = NO;
+        }];
+    });
+}
+
+void GBOverlayResetBallPosition(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (gRoot) [gRoot resetBallPosition];
+    });
 }

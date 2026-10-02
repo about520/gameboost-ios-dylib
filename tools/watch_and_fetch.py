@@ -17,6 +17,7 @@ import pathlib
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 
@@ -24,6 +25,32 @@ API = "https://api.github.com"
 UA = "GameBoost-Watcher"
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / "build"
+
+
+class _StripAuthOnCrossHost(urllib.request.HTTPRedirectHandler):
+    """
+    artifact 的 zip 端点返回 302，跳到 pipelines.actions.githubusercontent.com
+    的「已签名 URL」。签名 URL 不接受额外的 Authorization 头，多带就 401。
+    所以跨 host 跳转时必须把头摘掉。
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is None:
+            return None
+        old_host = urllib.parse.urlparse(req.full_url).netloc
+        new_host = urllib.parse.urlparse(newurl).netloc
+        if old_host != new_host:
+            for k in list(new.headers.keys()):
+                if k.lower() == "authorization":
+                    del new.headers[k]
+            for k in list(new.unredirected_hdrs.keys()):
+                if k.lower() == "authorization":
+                    del new.unredirected_hdrs[k]
+        return new
+
+
+_OPENER = urllib.request.build_opener(_StripAuthOnCrossHost)
 
 
 def req(method, path, token, raw=False, retries=4):
@@ -35,7 +62,7 @@ def req(method, path, token, raw=False, retries=4):
         r.add_header("X-GitHub-Api-Version", "2022-11-28")
         r.add_header("User-Agent", UA)
         try:
-            with urllib.request.urlopen(r, timeout=60) as resp:
+            with _OPENER.open(r, timeout=60) as resp:
                 body = resp.read()
                 if raw:
                     return resp.status, body

@@ -134,6 +134,28 @@ char GBFirstArgType(const char *enc) {
     return GBArgType(enc, 0);
 }
 
+int GBArgCount(const char *enc) {
+    if (!enc || !*enc) return -1;
+    const char *p = enc;
+    // 跳过返回类型那一「单元」（类型 + 偏移数字）
+    p = GBNextUnit(p);                 // 0: 返回类型
+    // 跳过 self、_cmd 两个单元
+    p = GBNextUnit(p);                 // 1: self
+    p = GBNextUnit(p);                 // 2: _cmd
+    int n = 0;
+    while (*p) {
+        const char *before = p;
+        p = GBNextUnit(p);
+        // 编码末尾常跟着「偏移数字」而没有后续类型（如 v16@0:8 末尾的 8），
+        // 这种纯数字单元不能算作一个参数，到此为止。
+        const char *q = before;
+        while (*q && isdigit((unsigned char)*q)) q++;
+        if (*q == '\0') break;
+        n++;
+    }
+    return n;
+}
+
 char GBArgType(const char *enc, int index) {
     if (!enc || !*enc || index < 0) return 0;
     const char *p = enc;

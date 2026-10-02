@@ -314,8 +314,28 @@ NSInteger GBInstallRewardHooks(void) {
             const char *enc  = method_getTypeEncoding(methods[i]);
             char ret = GBReturnType(enc);
             char arg = GBFirstArgType(enc);
+            int  argc = GBArgCount(enc);
 
-            GBHookEntry *e = GBFindEntry(ret, arg);
+            // ★ 参数个数硬性校验 ★（v1.3 关键修复）
+            // 我们的模板只按「0 参」或「单数值参数」调用原实现。
+            // 游戏里常见 addCoins:bonus: / grant:reason: 这种**多参数**发奖方法，
+            // 一旦被关键词命中并挂上单参模板，hook 调 orig 时会漏掉第二个参数，
+            // 那个寄存器是未初始化的垃圾值 —— 原方法很可能拿它当对象/指针去
+            // 解引用，结果就是「点一下 / 领个奖励就闪退」。
+            // 所以：多参数方法一律不挂，宁可不翻倍也绝不崩。
+            GBHookEntry *e = NULL;
+            if (argc < 0) {                 // 编码解析失败，保守跳过
+                skippedSig++;
+                continue;
+            } else if (argc == 0) {
+                e = GBFindEntry(ret, 0);
+            } else if (argc == 1) {
+                e = GBFindEntry(ret, arg);
+            } else {
+                skippedSig++;
+                continue;                    // 多参数：签名不支持，跳过
+            }
+
             if (!e) {
                 skippedSig++;
                 continue;   // 签名不支持：只跳过，绝不硬挂（会崩）

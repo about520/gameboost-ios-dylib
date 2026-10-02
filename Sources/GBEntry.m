@@ -135,7 +135,7 @@ static void GBEntryBoot(void) {
     gBooted = YES;
 
     GBLogEnableFileOutput();
-    GBLog(@"================ GameBoost v1.2 启动 ================");
+    GBLog(@"================ GameBoost v1.3 启动 ================");
     GBLog(@"进程：%@  (pid %d)",
           NSProcessInfo.processInfo.processName, getpid());
     GBLog(@"主类：%@", NSProcessInfo.processInfo.arguments.firstObject);

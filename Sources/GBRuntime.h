@@ -37,6 +37,11 @@ const char *_Nullable GBTypeEncoding(Class cls, SEL sel, BOOL isClassMethod);
 /// 返回 0 表示没有参数或解析失败。
 char GBFirstArgType(const char *enc);
 
+/// 解析真实参数个数（不含 self/_cmd）。
+/// 例如 v24@0:8q16 → 1；v16@0:8 → 0；v28@0:8q16@24 → 2。
+/// 返回 -1 表示编码为空（解析失败）。
+int GBArgCount(const char *enc);
+
 /// 解析第 index 个参数的类型编码字符（index 0 = 第一个真实参数）。
 /// 返回 0 表示该位置没有参数或解析失败。
 char GBArgType(const char *enc, int index);

@@ -210,7 +210,7 @@ static UIWindow *gOverlayWindow = nil;
     CGFloat w = self.bounds.size.width;
     CGFloat y = 10;
 
-    [self titleLabel:@"GameBoost  v1.2" y:y]; y += 26;
+    [self titleLabel:@"GameBoost  v1.3" y:y]; y += 26;
     UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(14, y, w - 28, 16)];
     sub.text = @"拖动小球移动 · 点击小球开合面板";
     sub.textColor = [UIColor colorWithWhite:1 alpha:0.4];
